@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 서울 도시 열돔(Urban Heat Dome) 현상 데이터 분석 웹앱
@@ -12,12 +11,26 @@
     streamlit run app.py
 """
 
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+
+# ------------------------------------------------------------------
+# 경로 설정
+# ------------------------------------------------------------------
+# 상대경로("data/xxx.csv")는 앱을 실행하는 위치(작업 디렉터리)에 따라
+# 값이 달라져 FileNotFoundError의 흔한 원인이 된다.
+# 이 스크립트 파일(app.py) 기준 절대경로를 사용해 어디서 실행하든
+# 항상 같은 위치를 가리키도록 한다.
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+sys.path.insert(0, str(DATA_DIR))
 
 # ------------------------------------------------------------------
 # 기본 설정
@@ -28,8 +41,8 @@ st.set_page_config(
     layout="wide",
 )
 
-GU_CSV_PATH = "data/seoul_gu_temperature.csv"
-CLIMATE_CSV_PATH = "data/heat_dome_mechanism.csv"
+GU_CSV_PATH = DATA_DIR / "seoul_gu_temperature.csv"
+CLIMATE_CSV_PATH = DATA_DIR / "heat_dome_mechanism.csv"
 
 REGION_TYPE_ORDER = ["한강변", "일반주거", "산근처", "강남도심"]
 REGION_COLOR_MAP = {
@@ -43,9 +56,7 @@ REGION_COLOR_MAP = {
 # ------------------------------------------------------------------
 # 데이터 로딩
 # ------------------------------------------------------------------
-@st.cache_data
-def load_gu_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, encoding="utf-8-sig")
+def _validate_gu(df: pd.DataFrame) -> pd.DataFrame:
     required_cols = {"구", "지역유형", "월", "평균기온", "최고기온", "최저기온"}
     missing = required_cols - set(df.columns)
     if missing:
@@ -53,9 +64,7 @@ def load_gu_data(path: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data
-def load_climate_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, encoding="utf-8-sig")
+def _validate_climate(df: pd.DataFrame) -> pd.DataFrame:
     required_cols = {"날짜", "기온", "해면기압", "일사량", "상대습도", "풍속", "오존농도"}
     missing = required_cols - set(df.columns)
     if missing:
@@ -64,27 +73,48 @@ def load_climate_data(path: str) -> pd.DataFrame:
     return df
 
 
-def get_uploaded_or_default(label: str, default_path: str, loader):
-    uploaded = st.sidebar.file_uploader(label, type=["csv"], key=default_path)
+@st.cache_data
+def load_gu_data(csv_path: str) -> pd.DataFrame:
+    """CSV가 있으면 그대로 읽고, 없으면(FileNotFoundError) 동일한 구조의
+    샘플 데이터를 즉시 생성해서 반환한다 (배포 환경에서 data/ 폴더가
+    누락돼도 앱이 죽지 않도록 하는 안전장치)."""
     try:
-        if uploaded is not None:
-            if "gu" in default_path:
-                df = pd.read_csv(uploaded, encoding="utf-8-sig")
-            else:
-                df = pd.read_csv(uploaded, encoding="utf-8-sig")
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
+    except FileNotFoundError:
+        from generate_sample_data import generate_gu_df
+        df = generate_gu_df()
+    return _validate_gu(df)
+
+
+@st.cache_data
+def load_climate_data(csv_path: str) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
+    except FileNotFoundError:
+        from generate_sample_data import generate_climate_df
+        df = generate_climate_df()
+    return _validate_climate(df)
+
+
+def get_uploaded_or_default(label: str, key: str, default_path, loader):
+    uploaded = st.sidebar.file_uploader(label, type=["csv"], key=key)
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(uploaded, encoding="utf-8-sig")
+            if "날짜" in df.columns:
                 df["날짜"] = pd.to_datetime(df["날짜"])
             return df
-        return loader(default_path)
-    except Exception as e:
-        st.sidebar.error(f"파일을 불러오는 중 오류가 발생했습니다: {e}")
-        return loader(default_path)
+        except Exception as e:
+            st.sidebar.error(f"업로드한 파일을 읽는 중 오류가 발생했습니다: {e}")
+            st.sidebar.caption("기본(샘플) 데이터로 대신 표시합니다.")
+    return loader(str(default_path))
 
 
 st.sidebar.title("📁 데이터 설정")
 st.sidebar.caption("직접 CSV를 업로드하면 샘플 데이터 대신 사용됩니다. (컬럼 구조는 샘플과 동일해야 합니다)")
 
-gu_df = get_uploaded_or_default("구별 기온 CSV 업로드", GU_CSV_PATH, load_gu_data)
-climate_df = get_uploaded_or_default("열돔 기후 CSV 업로드", CLIMATE_CSV_PATH, load_climate_data)
+gu_df = get_uploaded_or_default("구별 기온 CSV 업로드", "gu_upload", GU_CSV_PATH, load_gu_data)
+climate_df = get_uploaded_or_default("열돔 기후 CSV 업로드", "climate_upload", CLIMATE_CSV_PATH, load_climate_data)
 
 # ------------------------------------------------------------------
 # 사이드바 필터
